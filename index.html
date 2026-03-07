@@ -71,7 +71,7 @@
           <rect x="10" y="29" width="28" height="1.5" rx="0.75" fill="rgba(0,0,0,0.15)" />
         </svg>
       </div>
-      <div class="android-tooltip" id="androidTooltip">Get the Android app 🚀</div>
+      <div class="android-install-msg" id="androidInstallMsg">Get the Android app 🚀</div>
     </div>
 
     <!-- Features Section -->
@@ -426,7 +426,7 @@
       animation: none;
     }
 
-    .android-tooltip {
+    .android-install-msg {
       background: #1a1e24;
       border: 1px solid rgba(61, 220, 132, 0.35);
       color: #eef2f5;
@@ -437,14 +437,14 @@
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
       white-space: nowrap;
       opacity: 0;
-      transform: translateX(-10px);
+      transform: translateY(10px);
       pointer-events: none;
       transition: opacity 0.5s ease, transform 0.5s ease;
     }
 
-    .android-tooltip.android-tooltip-show {
+    .android-install-msg.android-msg-show {
       opacity: 1;
-      transform: translateX(0);
+      transform: translateY(0);
       pointer-events: auto;
     }
 
@@ -523,18 +523,22 @@
         return;
       }
 
-      // Show tooltip after 12–15 seconds, keep for 5 seconds
-      var tooltip = document.getElementById('androidTooltip');
-      var delay = Math.floor(Math.random() * 3000) + 12000; // 12000–15000 ms
+      // Show tooltip after 1 second, keep visible for 12 seconds
+      var msg = document.getElementById('androidInstallMsg');
 
       setTimeout(function () {
-        if (tooltip) {
-          tooltip.classList.add('android-tooltip-show');
-          setTimeout(function () {
-            tooltip.classList.remove('android-tooltip-show');
-          }, 5000);
+        if (msg) {
+          msg.style.opacity = '1';
+          msg.style.transform = 'translateY(0)';
         }
-      }, delay);
+      }, 1000);
+
+      setTimeout(function () {
+        if (msg) {
+          msg.style.opacity = '0';
+          msg.style.transform = 'translateY(10px)';
+        }
+      }, 13000);
     })();
   </script>
 
