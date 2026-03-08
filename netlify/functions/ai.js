@@ -1,152 +1,154 @@
-document.addEventListener('DOMContentLoaded', () => {
-  const chatMessages = document.getElementById('chatMessages');
-  const messageInput = document.getElementById('messageInput');
-  const sendButton = document.getElementById('sendButton');
-  const quickButtons = document.querySelectorAll('.quick-btn');
+export async function handler(event) {
+  // Only allow POST requests
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Method Not Allowed" })
+    };
+  }
 
-  // ── Backend endpoint (Netlify function) ──────────────────────────────
-  const API_URL = '/.netlify/functions/ai';
+  // ── Request body validation ───────────────────────────────────────────
+  let message;
+  try {
+    const body = JSON.parse(event.body || "{}");
+    message = body.message;
+    console.log("USER QUESTION:", message);
+  } catch {
+    return {
+      statusCode: 400,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Invalid request body." })
+    };
+  }
 
-  // ── Initial greeting ──────────────────────────────────────────────────
-  addMessage(
-  'ai',
-  'Hi! I\'m EJ.Ai 👋\n\nYour AI study assistant created by EJ.\n\nAsk me anything about:\n\n💻 Programming\n🗄 Databases\n🌐 Networking\n📚 ICT study materials\n\nType your question below to get started 🚀'
- );
+  if (!message || typeof message !== "string" || message.trim() === "") {
+    return {
+      statusCode: 400,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Message is required and must be a non-empty string." })
+    };
+  }
 
-  // Ensure welcome message is visible at top on mobile (reset any stale scroll)
-  chatMessages.scrollTop = 0;
+  // Friendly fallback message shown only when ALL models fail
+  const FALLBACK_REPLY =
+    "EJ.Ai is currently busy helping other students. Please try again in a few seconds.";
 
-  // ── Quick-action buttons ──────────────────────────────────────────────
-  const prompts = {
-    explain: 'Explain code:\nPaste your code here →',
-    fix: 'Fix programming error:\nPaste your code and error here →',
-    summarize: 'Summarize notes:\nPaste your text or notes →',
-    roadmap: 'Learning roadmap:\nWhat topic do you want to learn?'
-  };
+  // ── Model priority list ───────────────────────────────────────────────
+  // Try primary first; on any failure wait 1 s then try fallback.
+  const MODELS = [
+    "openrouter/free",
+    "google/gemini-2.5-flash-lite"
+  ];
 
-  quickButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const key = btn.dataset.prompt;
-      if (prompts[key]) {
-        messageInput.value = prompts[key];
-        messageInput.focus();
-        messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
-      }
+  // ── Shared request payload builder ───────────────────────────────────
+  function buildPayload(model) {
+    return JSON.stringify({
+      model,
+      max_tokens: 500,
+      temperature: 0.7,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are EJ.Ai, a helpful AI study assistant for ICT students."
+        },
+        {
+          role: "user",
+          content: message.trim()
+        }
+      ]
     });
-  });
-
-  // ── Event listeners ───────────────────────────────────────────────────
-  sendButton.addEventListener('click', handleSend);
-
-  messageInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  });
-
-  // ── Core send flow ────────────────────────────────────────────────────
-  async function handleSend() {
-    const text = messageInput.value.trim();
-    if (!text) return;
-
-    // 1. Clear input & add user bubble
-    messageInput.value = '';
-    addMessage('user', text);
-
-    // 2. Scroll to bottom
-    scrollToBottom();
-
-    // 3. Show loading indicator
-    const loadingId = addLoadingMessage();
-
-    try {
-      // 4. Call Netlify function → OpenRouter → AI
-      const reply = await sendMessage(text);
-
-      // 5. Remove loading, display AI reply
-      removeLoadingMessage(loadingId);
-      addMessage('ai', reply);
-    } catch (err) {
-      console.error('Chat error:', err);
-      removeLoadingMessage(loadingId);
-      addMessage('error', '⚠ EJ.Ai is currently busy helping other students. Please try again in a few seconds.');
-    }
-
-    // 7. Scroll to bottom again
-    scrollToBottom();
   }
 
-  // ── API call ──────────────────────────────────────────────────────────
-  async function sendMessage(message) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, 30000);
-
+  // ── Single model attempt ──────────────────────────────────────────────
+  async function tryModel(model) {
+    let response;
     try {
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
-        signal: controller.signal
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://vta-ict-l5-community.netlify.app",
+          "X-Title": "VTA ICT L5 Community AI"
+        },
+        body: buildPayload(model)
       });
+    } catch (fetchError) {
+      // Network / DNS / timeout error
+      console.error(`[${model}] fetch error:`, fetchError.message);
+      return null;
+    }
 
-      clearTimeout(timeoutId);
+    // Non-2xx from OpenRouter (rate limit, overload, etc.)
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      console.error(`[${model}] HTTP ${response.status}:`, errorText);
+      return null;
+    }
 
-      const data = await response.json();
+    // Parse the response body
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      console.error(`[${model}] JSON parse error:`, parseError.message);
+      return null;
+    }
 
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
+    const reply = data?.choices?.[0]?.message?.content?.trim();
+    if (!reply) {
+      console.error(`[${model}] Empty reply from model`);
+      return null;
+    }
+
+    return reply;
+  }
+
+  // ── Fallback loop ─────────────────────────────────────────────────────
+  try {
+    for (let i = 0; i < MODELS.length; i++) {
+      const model = MODELS[i];
+
+      // Wait 1 second before every retry (not before the first attempt)
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
-      return data.reply || '⚠ Sorry, I encountered an error. Please try again later.';
-    } catch (err) {
-      clearTimeout(timeoutId);
-      throw err;
+      console.log(`Attempting model: ${model}`);
+      const startTime = Date.now();
+      const reply = await tryModel(model);
+
+      if (reply !== null) {
+        // Success — return immediately
+        console.log(`Success with model: ${model}`);
+        console.log(`Duration: ${Date.now() - startTime} ms`);
+        console.log("AI RESPONSE SENT");
+        return {
+          statusCode: 200,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reply })
+        };
+      }
+
+      console.warn(`Model failed, moving to next: ${model}`);
     }
+
+    // All models exhausted
+    console.error("All models failed. Returning fallback reply.");
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reply: FALLBACK_REPLY })
+    };
+  } catch (error) {
+    // Catch-all for any unexpected handler error
+    console.error("Handler error:", error.message);
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reply: FALLBACK_REPLY })
+    };
   }
-
-  // ── DOM helpers ───────────────────────────────────────────────────────
-  function addMessage(role, content) {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${role}`;
-
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
-
-    // Preserve newlines while keeping XSS-safe text rendering
-    bubble.style.whiteSpace = 'pre-wrap';
-    bubble.textContent = content;
-
-    messageDiv.appendChild(bubble);
-    chatMessages.appendChild(messageDiv);
-    return messageDiv;
-  }
-
-  function addLoadingMessage() {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = 'message ai loading';
-    messageDiv.id = 'loading-' + Date.now();
-
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
-
-    // Animated dots
-    bubble.innerHTML = 'Thinking<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
-
-    messageDiv.appendChild(bubble);
-    chatMessages.appendChild(messageDiv);
-    scrollToBottom();
-    return messageDiv.id;
-  }
-
-  function removeLoadingMessage(id) {
-    const el = document.getElementById(id);
-    if (el) el.remove();
-  }
-
-  function scrollToBottom() {
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-});
+}
